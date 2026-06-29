@@ -65,6 +65,11 @@ func (r *Routes) AssignRoutes(eng *gin.Engine) {
 
 	// Rotas para o gerenciador React (sem autenticação)
 	eng.Static("/assets", "./manager/dist/assets")
+	eng.StaticFile("/vite.svg", "./public/hover-evolution.png")
+
+	eng.GET("/", func(c *gin.Context) {
+		c.Redirect(http.StatusFound, "/manager/login")
+	})
 
 	// Ajuste nas rotas do manager para suportar client-side routing do React
 	eng.GET("/manager/*any", func(c *gin.Context) {
