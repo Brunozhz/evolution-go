@@ -10,5 +10,46 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // The manager is distributed here as a compiled bundle. Keep this small
+      // action separate so public connection links stay available without
+      // editing generated application code.
+      (() => {
+        async function addPublicLinkButton(heading) {
+          const card = heading.closest('.group');
+          const actions = card && card.querySelector('.flex.border-t');
+          if (!actions || actions.querySelector('.public-connect-link')) return;
+          const button = document.createElement('button');
+          button.className = 'public-connect-link flex-1 rounded-none h-12 text-cyan-500 hover:text-cyan-400 hover:bg-cyan-500/10';
+          button.type = 'button';
+          button.textContent = 'Link do QR';
+          button.addEventListener('click', async () => {
+            const saved = JSON.parse(localStorage.getItem('evolution-auth') || '{}').state || {};
+            const instanceName = heading.textContent;
+            if (!saved.apiUrl || !saved.apiKey) return alert('Faça login novamente no Manager.');
+            button.disabled = true;
+            button.textContent = 'Gerando…';
+            try {
+              const all = await fetch(saved.apiUrl + '/instance/all', { headers: { apikey: saved.apiKey } });
+              const instances = (await all.json()).data || [];
+              const instance = instances.find(item => item.name === instanceName);
+              if (!instance) throw new Error('Instância não encontrada.');
+              const response = await fetch(saved.apiUrl + '/instance/public-connect-link', {
+                method: 'POST', headers: { 'Content-Type': 'application/json', apikey: instance.token },
+                body: JSON.stringify({ expiresInMinutes: 1440 })
+              });
+              const payload = await response.json();
+              if (!response.ok) throw new Error(payload.error || 'Não foi possível gerar o link.');
+              await navigator.clipboard.writeText(payload.data.url);
+              alert('Link público copiado. Ele expira em 24 horas.');
+            } catch (error) { alert(error.message || 'Não foi possível gerar o link.'); }
+            finally { button.disabled = false; button.textContent = 'Link do QR'; }
+          });
+          actions.prepend(button);
+        }
+        new MutationObserver(() => document.querySelectorAll('h3').forEach(addPublicLinkButton))
+          .observe(document.body, { childList: true, subtree: true });
+      })();
+    </script>
   </body>
 </html>

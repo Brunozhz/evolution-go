@@ -79,6 +79,9 @@ func (r *Routes) AssignRoutes(eng *gin.Engine) {
 	eng.GET("/manager", func(c *gin.Context) {
 		c.File("manager/dist/index.html")
 	})
+	eng.GET("/connect/:token", r.instanceHandler.PublicConnectPage)
+	eng.GET("/public/connect/:token/status", r.instanceHandler.PublicConnectStatus)
+	eng.GET("/public/connect/:token/qr", r.instanceHandler.PublicConnectQR)
 
 	eng.GET("/server/ok", r.serverHandler.ServerOk)
 
@@ -102,6 +105,7 @@ func (r *Routes) AssignRoutes(eng *gin.Engine) {
 		routes.Use(r.authMiddleware.Auth)
 		{
 			routes.POST("/connect", r.instanceHandler.Connect)
+			routes.POST("/public-connect-link", r.instanceHandler.CreatePublicConnectLink)
 			routes.GET("/status", r.instanceHandler.Status)
 			routes.GET("/qr", r.instanceHandler.Qr)
 			routes.POST("/pair", r.jidValidationMiddleware.ValidateNumberField(), r.instanceHandler.Pair)

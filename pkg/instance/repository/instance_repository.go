@@ -2,6 +2,7 @@ package instance_repository
 
 import (
 	"fmt"
+	"time"
 
 	instance_model "github.com/EvolutionAPI/evolution-go/pkg/instance/model"
 	"github.com/gomessguii/logger"
@@ -20,12 +21,14 @@ type InstanceRepository interface {
 	GetInstanceByID(instanceId string) (*instance_model.Instance, error)
 	GetConnectedInstanceByID(instanceId string) (*instance_model.Instance, error)
 	GetInstanceByToken(token string) (*instance_model.Instance, error)
+	GetInstanceByPublicConnectTokenHash(tokenHash string) (*instance_model.Instance, error)
 	GetInstanceByName(name string) (*instance_model.Instance, error)
 	Update(*instance_model.Instance) error
 	UpdateConnected(userId string, status bool, disconnectReason string) error
 	UpdateQrcode(userId string, qr string) error
 	UpdateProxy(userId string, proxy string) error
 	UpdateJid(userId string, jid string) error
+	UpdatePublicConnectLink(instanceID, tokenHash string, expiresAt time.Time) error
 	GetAllConnectedInstances() ([]*instance_model.Instance, error)
 	GetAllConnectedInstancesByClientName(clientName string) ([]*instance_model.Instance, error)
 	GetAll(clientName string) ([]*instance_model.Instance, error)
@@ -54,6 +57,15 @@ func (i *instanceRepository) GetInstanceByToken(token string) (*instance_model.I
 		return nil, err
 	}
 
+	return &instance, nil
+}
+
+func (i *instanceRepository) GetInstanceByPublicConnectTokenHash(tokenHash string) (*instance_model.Instance, error) {
+	var instance instance_model.Instance
+	err := i.db.Where("public_connect_token_hash = ?", tokenHash).First(&instance).Error
+	if err != nil {
+		return nil, err
+	}
 	return &instance, nil
 }
 
@@ -114,6 +126,13 @@ func (i *instanceRepository) UpdateProxy(userId string, proxy string) error {
 
 func (i *instanceRepository) UpdateJid(userId string, jid string) error {
 	return i.db.Model(&instance_model.Instance{}).Where("id = ?", userId).Update("jid", jid).Error
+}
+
+func (i *instanceRepository) UpdatePublicConnectLink(instanceID, tokenHash string, expiresAt time.Time) error {
+	return i.db.Model(&instance_model.Instance{}).Where("id = ?", instanceID).Updates(map[string]interface{}{
+		"public_connect_token_hash": tokenHash,
+		"public_connect_expires_at": expiresAt,
+	}).Error
 }
 
 func (i *instanceRepository) GetAllConnectedInstances() ([]*instance_model.Instance, error) {

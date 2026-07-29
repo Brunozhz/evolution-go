@@ -3,6 +3,9 @@ package instance_service
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,6 +47,8 @@ type InstanceService interface {
 	GetLogs(instanceId string, startDate, endDate time.Time, level string, limit int) ([]logger_wrapper.LogEntry, error)
 	GetAdvancedSettings(instanceId string) (*instance_model.AdvancedSettings, error)
 	UpdateAdvancedSettings(instanceId string, settings *instance_model.AdvancedSettings) error
+	CreatePublicConnectLink(instance *instance_model.Instance, ttl time.Duration) (*PublicConnectLink, error)
+	GetPublicConnectInstance(token string) (*instance_model.Instance, error)
 }
 
 type instances struct {
@@ -100,6 +105,13 @@ type PairStruct struct {
 
 type PairReturnStruct struct {
 	PairingCode string
+}
+
+// PublicConnectLink is only returned when it is created. The token is never
+// included in an instance record or list response.
+type PublicConnectLink struct {
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expiresAt"`
 }
 
 type SetProxyStruct struct {
@@ -405,6 +417,21 @@ func (i instances) GetQr(instance *instance_model.Instance) (*QrcodeStruct, erro
 	logger := i.loggerWrapper.GetLogger(instance.Id)
 	client := i.clientPointer[instance.Id]
 
+	if client != nil && client.IsLoggedIn() {
+		return nil, fmt.Errorf("session already logged in")
+	}
+
+	// A failed WebSocket leaves a disconnected client in memory. The old flow
+	// would keep reusing it forever, so no later button click could generate a
+	// new QR code. Cleanly restart the runtime before asking for another QR.
+	if client != nil && !client.IsConnected() {
+		logger.LogWarn("[%s] Stale disconnected client found; restarting QR session", instance.Id)
+		if err := i.whatsmeowService.ReconnectClient(instance.Id); err != nil {
+			return nil, fmt.Errorf("failed to restart QR session: %w", err)
+		}
+		client = i.clientPointer[instance.Id]
+	}
+
 	// Se não há cliente ou o cliente está logado, precisamos iniciar um novo cliente
 	if client == nil || client.IsLoggedIn() {
 		if client != nil && client.IsLoggedIn() {
@@ -468,6 +495,42 @@ func (i instances) GetQr(instance *instance_model.Instance) (*QrcodeStruct, erro
 	}
 
 	return qr, nil
+}
+
+func (i instances) CreatePublicConnectLink(instance *instance_model.Instance, ttl time.Duration) (*PublicConnectLink, error) {
+	if ttl <= 0 {
+		ttl = 24 * time.Hour
+	}
+	if ttl > 7*24*time.Hour {
+		return nil, fmt.Errorf("public connection links may be valid for at most 7 days")
+	}
+
+	rawToken := make([]byte, 32)
+	if _, err := rand.Read(rawToken); err != nil {
+		return nil, fmt.Errorf("generate public connection token: %w", err)
+	}
+	token := base64.RawURLEncoding.EncodeToString(rawToken)
+	hash := sha256.Sum256([]byte(token))
+	expiresAt := time.Now().Add(ttl).UTC()
+	if err := i.instanceRepository.UpdatePublicConnectLink(instance.Id, base64.RawURLEncoding.EncodeToString(hash[:]), expiresAt); err != nil {
+		return nil, err
+	}
+	return &PublicConnectLink{Token: token, ExpiresAt: expiresAt}, nil
+}
+
+func (i instances) GetPublicConnectInstance(token string) (*instance_model.Instance, error) {
+	if token == "" {
+		return nil, fmt.Errorf("public connection link not found")
+	}
+	hash := sha256.Sum256([]byte(token))
+	instance, err := i.instanceRepository.GetInstanceByPublicConnectTokenHash(base64.RawURLEncoding.EncodeToString(hash[:]))
+	if err != nil {
+		return nil, fmt.Errorf("public connection link not found")
+	}
+	if instance.PublicConnectExpiresAt == nil || !instance.PublicConnectExpiresAt.After(time.Now()) {
+		return nil, fmt.Errorf("public connection link has expired")
+	}
+	return instance, nil
 }
 
 func (i instances) Pair(data *PairStruct, instance *instance_model.Instance) (*PairReturnStruct, error) {

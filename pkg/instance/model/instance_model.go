@@ -24,6 +24,10 @@ type Instance struct {
 	OsName           string    `json:"os_name"`
 	Proxy            string    `json:"proxy"`
 	ClientName       string    `json:"client_name"`
+	// PublicConnectTokenHash keeps public pairing links revocable without
+	// storing the shareable token itself in the database.
+	PublicConnectTokenHash string     `json:"-" gorm:"index"`
+	PublicConnectExpiresAt *time.Time `json:"publicConnectExpiresAt"`
 	CreatedAt        time.Time `json:"createdAt" gorm:"autoCreateTime"`
 
 	// Advanced Settings

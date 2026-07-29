@@ -1,7 +1,9 @@
 package instance_handler
 
 import (
+	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -30,11 +32,87 @@ type InstanceHandler interface {
 	GetLogs(ctx *gin.Context)
 	GetAdvancedSettings(ctx *gin.Context)
 	UpdateAdvancedSettings(ctx *gin.Context)
+	CreatePublicConnectLink(ctx *gin.Context)
+	PublicConnectPage(ctx *gin.Context)
+	PublicConnectStatus(ctx *gin.Context)
+	PublicConnectQR(ctx *gin.Context)
 }
 
 type instanceHandler struct {
 	config          *config.Config
 	instanceService instance_service.InstanceService
+}
+
+type publicConnectLinkRequest struct {
+	ExpiresInMinutes int `json:"expiresInMinutes"`
+}
+
+const publicConnectPage = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Conectar WhatsApp</title><style>body{margin:0;background:#07120f;color:#e8fff4;font:16px system-ui,sans-serif;display:grid;min-height:100vh;place-items:center}.card{max-width:430px;margin:24px;padding:32px;border:1px solid #244c3d;border-radius:20px;background:#0d1d17;text-align:center;box-shadow:0 24px 80px #0008}h1{margin:0 0 8px;color:#4fffa6}p{color:#b9d4c7}.qr{width:256px;height:256px;margin:24px auto;display:grid;place-items:center;background:#fff;border-radius:12px}.qr img{width:232px;height:232px}.wait{color:#9dc3af}.ok{color:#4fffa6}.error{color:#ffacac}.small{font-size:13px}</style></head><body><main class="card"><h1>Conectar WhatsApp</h1><p id="name">Carregando conexão…</p><div class="qr" id="qr"><span class="wait">Gerando QR Code…</span></div><p id="status" class="wait">Aguarde um momento.</p><p class="small">No WhatsApp: Dispositivos conectados → Conectar um dispositivo.</p></main><script>const token=__TOKEN__;const qr=document.getElementById('qr'),status=document.getElementById('status'),name=document.getElementById('name');async function refresh(){try{const r=await fetch('/public/connect/'+token+'/status');const d=await r.json();if(!r.ok)throw Error(d.error||'Link indisponível');name.textContent=d.data.instanceName;if(d.data.connected){status.textContent='Conectado com sucesso.';status.className='ok';qr.innerHTML='<span class="ok">✓</span>';return}const q=await fetch('/public/connect/'+token+'/qr');if(q.ok){const x=await q.json();qr.innerHTML='<img alt="QR Code do WhatsApp" src="'+x.data.qrcode+'">';status.textContent='Escaneie o QR Code com o WhatsApp.';status.className='wait'}else{status.textContent='Preparando a conexão…';status.className='wait'}}catch(e){status.textContent=e.message;status.className='error'}setTimeout(refresh,5000)}refresh();</script></body></html>`
+
+func (i *instanceHandler) CreatePublicConnectLink(ctx *gin.Context) {
+	instance, ok := ctx.MustGet("instance").(*instance_model.Instance)
+	if !ok {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "instance not found"})
+		return
+	}
+	var request publicConnectLinkRequest
+	if err := ctx.ShouldBindJSON(&request); err != nil && err.Error() != "EOF" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	link, err := i.instanceService.CreatePublicConnectLink(instance, time.Duration(request.ExpiresInMinutes)*time.Minute)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"message": "success", "data": gin.H{"url": publicBaseURL(ctx) + "/connect/" + link.Token, "expiresAt": link.ExpiresAt}})
+}
+
+func (i *instanceHandler) PublicConnectPage(ctx *gin.Context) {
+	tokenJSON, _ := json.Marshal(ctx.Param("token"))
+	ctx.Data(http.StatusOK, "text/html; charset=utf-8", []byte(strings.Replace(publicConnectPage, "__TOKEN__", string(tokenJSON), 1)))
+}
+
+func (i *instanceHandler) PublicConnectStatus(ctx *gin.Context) {
+	instance, err := i.instanceService.GetPublicConnectInstance(ctx.Param("token"))
+	if err != nil {
+		ctx.JSON(http.StatusGone, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": gin.H{"instanceName": instance.Name, "connected": instance.Connected, "status": publicConnectionStatus(instance)}})
+}
+
+func (i *instanceHandler) PublicConnectQR(ctx *gin.Context) {
+	instance, err := i.instanceService.GetPublicConnectInstance(ctx.Param("token"))
+	if err != nil {
+		ctx.JSON(http.StatusGone, gin.H{"error": err.Error()})
+		return
+	}
+	if instance.Connected {
+		ctx.JSON(http.StatusConflict, gin.H{"error": "instance already connected"})
+		return
+	}
+	qr, err := i.instanceService.GetQr(instance)
+	if err != nil {
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": gin.H{"qrcode": qr.Qrcode}})
+}
+
+func publicConnectionStatus(instance *instance_model.Instance) string {
+	if instance.Connected {
+		return "connected"
+	}
+	return "waiting"
+}
+
+func publicBaseURL(ctx *gin.Context) string {
+	scheme := "http"
+	if ctx.GetHeader("X-Forwarded-Proto") == "https" || ctx.Request.TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + ctx.Request.Host
 }
 
 // Create a new instance
