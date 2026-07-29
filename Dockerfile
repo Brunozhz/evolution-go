@@ -4,32 +4,28 @@ RUN apk update && apk add --no-cache git build-base libjpeg-turbo-dev libwebp-de
 
 WORKDIR /build
 
+# Copiar apenas arquivos de dependências primeiro para cachear o download
+COPY go.mod go.sum ./
+
+# whatsmeow agora vem do proxy oficial (go.mau.fi/whatsmeow, sem replace local) —
+# não há mais submódulo whatsmeow-lib para copiar.
+RUN go mod download
+
+# Copiar o restante do código
 COPY . .
-
-ARG WHATSMEOW_REF=0923702fb3fac8525241f15331b92116485d69eb
-
-# O go.mod usa replace para ./whatsmeow-lib. Se o deploy nao baixar submodulos,
-# clonamos a mesma revisao registrada no repositorio principal.
-RUN if [ ! -f whatsmeow-lib/go.mod ]; then \
-      rm -rf whatsmeow-lib && \
-      git clone https://github.com/EvolutionAPI/whatsmeow.git whatsmeow-lib && \
-      git -C whatsmeow-lib checkout "$WHATSMEOW_REF"; \
-    fi
-
-RUN go mod tidy && go mod download
 
 ARG VERSION=dev
 RUN CGO_ENABLED=1 go build -ldflags "-X main.version=${VERSION}" -o server ./cmd/evolution-go
 
 FROM alpine:3.19.1 AS final
 
-RUN apk update && apk add --no-cache tzdata ffmpeg libjpeg-turbo libwebp
+# poppler-utils provides pdftoppm, used to rasterize PDF page 1 for /send/media document thumbnails
+RUN apk update && apk add --no-cache tzdata ffmpeg libjpeg-turbo libwebp poppler-utils
 
 WORKDIR /app
 
 COPY --from=build /build/server .
 COPY --from=build /build/manager/dist ./manager/dist
-COPY --from=build /build/public ./public
 COPY --from=build /build/VERSION ./VERSION
 
 ENV TZ=America/Sao_Paulo
